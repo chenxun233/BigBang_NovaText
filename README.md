@@ -35,7 +35,6 @@ Android 13+ 可用触控事件监听替代悬浮球。开启后可按**面积 / 
 
 - **GitHub Releases（本 fork）**：<https://github.com/chenxun233/BigBang_NovaText/releases/latest>
 - **上游 Releases**：<https://github.com/CashewTeam/BigBang_NovaText/releases/latest>
-- **夸克网盘**：<https://pan.quark.cn/s/b272e9416cab>
 
 ### 🔐 授权
 
