@@ -24,6 +24,8 @@ public final class BigBangSettings {
     public static final String KEY_OCR_RECOGNIZER_MODE = "ocr_recognizer_mode";
     public static final String KEY_OCR_WHITELIST_PACKAGES = "ocr_whitelist_packages";
     public static final String KEY_OCR_SELECTION_CAPTURE_DELAY_MS = "ocr_selection_capture_delay_ms";
+    /** Extra wait after the system long-press. Not a touch-area threshold. */
+    public static final String KEY_LONG_PRESS_EXTRA_DELAY_MS = "long_press_extra_delay_ms";
     public static final String KEY_FLOATING_BALL_SIZE_PERCENT = "floating_ball_size_percent";
     public static final String KEY_FLOATING_BALL_ACTIVE_ALPHA_PERCENT = "floating_ball_active_alpha_percent";
     public static final String KEY_FLOATING_BALL_IDLE_ALPHA_PERCENT = "floating_ball_idle_alpha_percent";
@@ -33,6 +35,16 @@ public final class BigBangSettings {
     public static final String KEY_FLOATING_BALL_ONE_HAND_ANGLE_DEGREES = "floating_ball_one_hand_angle_degrees";
     public static final String KEY_FLOATING_BALL_HIDDEN = "floating_ball_hidden";
     public static final String KEY_FLOATING_BALL_LANDSCAPE_SAFE_AREA = "floating_ball_landscape_safe_area";
+    /** When true, ball stays where released (no left/right snap). Overrides one-hand auto-dock. */
+    public static final String KEY_FLOATING_BALL_FREE_POSITION = "floating_ball_free_position";
+    /** Hold-still duration (ms) before drag boom; finger must stay down. */
+    public static final String KEY_FLOATING_BALL_TRIGGER_HOLD_MS = "floating_ball_trigger_hold_ms";
+    /**
+     * One shared inset (dp) applied to all four edges as touch-exploration passthrough.
+     * Stored in dp; convert to px when calling setTouchExplorationPassthroughRegion.
+     */
+    public static final String KEY_EXPERIMENTAL_TOUCH_PASSTHROUGH_INSET_DP =
+            "experimental_touch_passthrough_inset_dp";
     public static final String KEY_ADAPTIVE_LAUNCHER_ICON = "adaptive_launcher_icon";
     public static final String KEY_CLASSIC_OVERLAY_STYLE = "classic_overlay_style";
     public static final String KEY_CLOSE_BIG_BANG_AFTER_COPY = "close_big_bang_after_copy";
@@ -89,10 +101,14 @@ public final class BigBangSettings {
     private static final int DEFAULT_WIKI_SEARCH_TYPE = TYPE_WIKI;
     private static final String DEFAULT_OCR_RECOGNIZER_MODE = OCR_MODE_CHINESE;
     private static final int DEFAULT_OCR_SELECTION_CAPTURE_DELAY_MS = 250;
+    private static final int DEFAULT_LONG_PRESS_EXTRA_DELAY_MS = 300;
     private static final int DEFAULT_FLOATING_BALL_SIZE_PERCENT = 75;
     private static final int DEFAULT_FLOATING_BALL_ACTIVE_ALPHA_PERCENT = 80;
     private static final int DEFAULT_FLOATING_BALL_IDLE_ALPHA_PERCENT = 20;
     private static final int DEFAULT_FLOATING_BALL_ONE_HAND_ANGLE_DEGREES = 18;
+    private static final int DEFAULT_FLOATING_BALL_TRIGGER_HOLD_MS = 300;
+    /** ~gesture inset; one slider sets left/right/top/bottom together. */
+    private static final int DEFAULT_EXPERIMENTAL_TOUCH_PASSTHROUGH_INSET_DP = 40;
     private static final int DEFAULT_GAP_ROW_HEIGHT_PERCENT = 15;
     private static final String DEFAULT_EXPERIMENTAL_TOUCH_MODE = "PRESSURE";
     private static final float DEFAULT_EXPERIMENTAL_TOUCH_AREA_THRESHOLD = 500f;
@@ -355,6 +371,19 @@ public final class BigBangSettings {
                 .apply();
     }
 
+    public int getLongPressExtraDelayMs() {
+        return clampLongPressExtraDelay(preferences.getInt(
+                KEY_LONG_PRESS_EXTRA_DELAY_MS,
+                DEFAULT_LONG_PRESS_EXTRA_DELAY_MS
+        ));
+    }
+
+    public void setLongPressExtraDelayMs(int value) {
+        preferences.edit()
+                .putInt(KEY_LONG_PRESS_EXTRA_DELAY_MS, clampLongPressExtraDelay(value))
+                .apply();
+    }
+
     public int getFloatingBallSizePercent() {
         return clampFloatingBallSizePercent(preferences.getInt(
                 KEY_FLOATING_BALL_SIZE_PERCENT,
@@ -443,6 +472,40 @@ public final class BigBangSettings {
         preferences.edit().putBoolean(KEY_FLOATING_BALL_LANDSCAPE_SAFE_AREA, enabled).apply();
     }
 
+    public boolean isFloatingBallFreePositionEnabled() {
+        return preferences.getBoolean(KEY_FLOATING_BALL_FREE_POSITION, false);
+    }
+
+    public void setFloatingBallFreePositionEnabled(boolean enabled) {
+        preferences.edit().putBoolean(KEY_FLOATING_BALL_FREE_POSITION, enabled).apply();
+    }
+
+    public int getFloatingBallTriggerHoldMs() {
+        return clampFloatingBallTriggerHoldMs(preferences.getInt(
+                KEY_FLOATING_BALL_TRIGGER_HOLD_MS,
+                DEFAULT_FLOATING_BALL_TRIGGER_HOLD_MS
+        ));
+    }
+
+    public void setFloatingBallTriggerHoldMs(int value) {
+        preferences.edit()
+                .putInt(KEY_FLOATING_BALL_TRIGGER_HOLD_MS, clampFloatingBallTriggerHoldMs(value))
+                .apply();
+    }
+
+    public int getExperimentalTouchPassthroughInsetDp() {
+        return clampPassthroughInsetDp(preferences.getInt(
+                KEY_EXPERIMENTAL_TOUCH_PASSTHROUGH_INSET_DP,
+                DEFAULT_EXPERIMENTAL_TOUCH_PASSTHROUGH_INSET_DP
+        ));
+    }
+
+    public void setExperimentalTouchPassthroughInsetDp(int value) {
+        preferences.edit()
+                .putInt(KEY_EXPERIMENTAL_TOUCH_PASSTHROUGH_INSET_DP, clampPassthroughInsetDp(value))
+                .apply();
+    }
+
     public boolean isAdaptiveLauncherIconEnabled() {
         return preferences.getBoolean(KEY_ADAPTIVE_LAUNCHER_ICON, false);
     }
@@ -506,6 +569,18 @@ public final class BigBangSettings {
 
     private static int clampOcrSelectionCaptureDelay(int value) {
         return Math.max(0, Math.min(1000, value));
+    }
+
+    private static int clampLongPressExtraDelay(int value) {
+        return Math.max(0, Math.min(1000, value));
+    }
+
+    private static int clampFloatingBallTriggerHoldMs(int value) {
+        return Math.max(0, Math.min(2000, value));
+    }
+
+    private static int clampPassthroughInsetDp(int value) {
+        return Math.max(0, Math.min(120, value));
     }
 
     private static Set<String> defaultOcrWhitelistPackages() {

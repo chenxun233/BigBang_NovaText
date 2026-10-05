@@ -82,6 +82,12 @@
     <string name="permission_floating_ball_one_hand_title">单手优化</string>
     <string name="permission_floating_ball_one_hand_summary">开启后，每 1 秒根据手机倾斜方向自动切换左右停靠，并带角度阈值避免误切换。</string>
     <string name="permission_floating_ball_one_hand_angle_title">单手切换角度</string>
+    <string name="permission_floating_ball_free_position_title">自由定位（不吸附两侧）</string>
+    <string name="permission_floating_ball_free_position_summary">打开后松手不吸附左右边缘，可停在屏幕任意位置；单手优化的自动靠边也会停用。</string>
+    <string name="permission_floating_ball_trigger_hold_title">停住再炸延迟</string>
+    <string name="permission_floating_ball_trigger_hold_summary">拖动后需在同一位置按住超过该时长才触发；中途移动会重新计时，提前松手不触发。</string>
+    <string name="experimental_passthrough_inset_title">边缘放行宽度</string>
+    <string name="experimental_passthrough_inset_summary">上下左右共用同一宽度。放行区内触摸交给系统手势，不参与面积/压感触发。拖动滑块时可看半透明蓝预览。</string>
     <string name="settings_entry_section_title">全局触发入口</string>
     <string name="settings_entry_section_summary">管理启动向导、悬浮球服务，以及其他设置分类。</string>
     <string name="startup_wizard_title">启动向导</string>

@@ -88,6 +88,12 @@
     <string name="permission_floating_ball_hidden_summary">静置时隐藏胶囊背景和圆球，仅保留蓝色指示条，触控区域不变</string>
     <string name="permission_floating_ball_landscape_safe_area_title">横屏安全区</string>
     <string name="permission_floating_ball_landscape_safe_area_summary">关闭后横屏下悬浮球可在屏幕完整宽度内自由拖动，适合平板</string>
+    <string name="permission_floating_ball_free_position_title">自由定位（不吸附两侧）</string>
+    <string name="permission_floating_ball_free_position_summary">打开后松手不吸附左右边缘，可停在屏幕任意位置；单手优化的自动靠边也会停用。</string>
+    <string name="permission_floating_ball_trigger_hold_title">停住再炸延迟</string>
+    <string name="permission_floating_ball_trigger_hold_summary">拖动后需在同一位置按住超过该时长才触发；中途移动会重新计时，提前松手不触发。</string>
+    <string name="experimental_passthrough_inset_title">边缘放行宽度</string>
+    <string name="experimental_passthrough_inset_summary">上下左右共用同一宽度。放行区内触摸交给系统手势，不参与面积/压感触发。拖动滑块时可看半透明蓝预览。</string>
     <string name="ocr_section_title">OCR 识别</string>
     <string name="ocr_section_summary">使用离线 ML Kit V2 识别图片文字，并直接进入大爆炸。当前提供中文、日语、韩语和英语四种识别模式。</string>
     <string name="ocr_mode_chinese">中文</string>
@@ -96,6 +102,7 @@
     <string name="ocr_mode_latin">英语</string>
     <string name="ocr_debug_pick_image_button">选择图片进行 OCR 调试</string>
     <string name="ocr_selection_capture_delay_title">截图前延迟</string>
+    <string name="long_press_extra_delay_title">系统长按后的额外等待（不是接触面积阈值）</string>
     <string name="desktop_ocr_entry">桌面 OCR</string>
     <string name="desktop_ocr_entry_title">桌面 OCR 入口</string>
     <string name="desktop_ocr_entry_summary">添加固定快捷方式，点击后立即截图并进入范围选择 OCR，适合固定到 Dock 栏。</string>

@@ -6,6 +6,8 @@ import android.accessibilityservice.GestureDescription
 import android.accessibilityservice.TouchInteractionController
 import android.content.Context
 import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.Region
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +17,8 @@ import android.util.Log
 import android.view.Display
 import android.view.MotionEvent
 import android.view.ViewConfiguration
+import android.view.WindowManager
+import kotlin.math.roundToInt
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -166,6 +170,14 @@ object ExperimentalTouchController {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Api33.onForegroundPackage(packageName)
     }
 
+    /** Re-apply edge passthrough from settings without restarting the controller. */
+    fun refreshPassthrough(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val service = NovaTextAccessibilityService.activeInstance ?: return
+        if (!listening) return
+        Api33.applyPassthroughRegion(service, BigBangSettings.get(context).experimentalTouchPassthroughInsetDp)
+    }
+
     fun hasBatteryExemption(context: Context): Boolean =
         context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 
@@ -254,10 +266,15 @@ object ExperimentalTouchController {
             }
             controller?.registerCallback(null, callback!!)
             listening = true
+            applyPassthroughRegion(
+                service,
+                BigBangSettings.get(service).experimentalTouchPassthroughInsetDp,
+            )
             Log.d(TAG, "controller=listening package=$foregroundPackage")
         }
 
         fun disconnect() {
+            accessibilityService?.let { clearPassthroughRegion(it) }
             callback?.let { controller?.unregisterCallback(it) }
             accessibilityService?.serviceInfo = accessibilityService?.serviceInfo?.apply {
                 flags = flags and AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE.inv()
@@ -456,6 +473,51 @@ object ExperimentalTouchController {
         }
 
         private fun elapsed(eventTime: Long): Float = (eventTime - gestureStartTime).coerceAtLeast(0L).toFloat()
+
+        /**
+         * One shared insetDp applied to all four edges. Touches in this Region skip
+         * touch-exploration / our TouchInteractionController (system gestures pass through).
+         */
+        fun applyPassthroughRegion(service: AccessibilityService, insetDp: Int) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+            val insetPx = dpToPx(service, insetDp.coerceAtLeast(0))
+            val bounds = screenBounds(service)
+            val width = bounds.width()
+            val height = bounds.height()
+            if (width <= 0 || height <= 0) return
+            val region = Region()
+            if (insetPx > 0) {
+                val capped = insetPx
+                    .coerceAtMost(width / 4)
+                    .coerceAtMost(height / 4)
+                region.op(Rect(bounds.left, bounds.top, bounds.right, bounds.top + capped), Region.Op.UNION)
+                region.op(Rect(bounds.left, bounds.bottom - capped, bounds.right, bounds.bottom), Region.Op.UNION)
+                region.op(Rect(bounds.left, bounds.top, bounds.left + capped, bounds.bottom), Region.Op.UNION)
+                region.op(Rect(bounds.right - capped, bounds.top, bounds.right, bounds.bottom), Region.Op.UNION)
+            }
+            service.setTouchExplorationPassthroughRegion(Display.DEFAULT_DISPLAY, region)
+            Log.d(TAG, "passthrough insetDp=$insetDp insetPx=$insetPx bounds=$bounds")
+        }
+
+        fun clearPassthroughRegion(service: AccessibilityService) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+            service.setTouchExplorationPassthroughRegion(Display.DEFAULT_DISPLAY, Region())
+        }
+
+        private fun dpToPx(service: AccessibilityService, dp: Int): Int =
+            (dp * service.resources.displayMetrics.density).roundToInt().coerceAtLeast(0)
+
+        private fun screenBounds(service: AccessibilityService): Rect {
+            val windowManager = service.getSystemService(WindowManager::class.java)
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Rect(windowManager.currentWindowMetrics.bounds)
+            } else {
+                val point = android.graphics.Point()
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay.getRealSize(point)
+                Rect(0, 0, point.x, point.y)
+            }
+        }
 
         private fun logEvent(event: MotionEvent, state: Int) {
             val values = if (event.pointerCount == 0) "pointers=0" else {

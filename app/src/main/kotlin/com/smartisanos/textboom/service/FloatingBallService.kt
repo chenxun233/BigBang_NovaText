@@ -24,6 +24,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Display
 import android.view.Gravity
@@ -76,17 +77,28 @@ class FloatingBallService : Service(), SensorEventListener {
     private var accelerometer: Sensor? = null
     private var oneHandSensorRegistered = false
     private var lastOneHandCheckAt = 0L
+    private var holdStableRawX = 0f
+    private var holdStableRawY = 0f
+    private var holdStillSince = 0L
+    private var holdTriggeredForGesture = false
+    private var dragPastMoveThreshold = false
+    private val holdStillCheckRunnable = Runnable { maybeFireHoldStillBoom() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        preferences = BigBangPreferences(this)
+        settings = BigBangSettings.get(this)
+        // Default off: do not add the edge overlay. An invisible window still steals the back gesture.
+        if (!preferences.isFloatingBallEnabled()) {
+            NovaTextLogger.d("floating ball window not created; overlay default off")
+            stopSelf()
+            return
+        }
         activeService = this
         isRunning = true
         activeState.value = true
-        preferences = BigBangPreferences(this)
-        settings = BigBangSettings.get(this)
-        preferences.setFloatingBallEnabled(true)
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -115,9 +127,9 @@ class FloatingBallService : Service(), SensorEventListener {
                 preferences.setFloatingBallEnabled(false)
                 stopSelf()
             }
-            ACTION_RESET_POSITION -> resetPositionNow()
+            ACTION_RESET_POSITION -> if (::layoutParams.isInitialized) resetPositionNow()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -126,6 +138,7 @@ class FloatingBallService : Service(), SensorEventListener {
     }
 
     override fun onDestroy() {
+        cancelHoldStillCheck()
         bubbleHandler.removeCallbacks(fadeBubbleRunnable)
         unregisterOneHandSensor()
         bubbleView?.let { windowManager.removeView(it) }
@@ -143,6 +156,8 @@ class FloatingBallService : Service(), SensorEventListener {
         if (now - lastOneHandCheckAt < ONE_HAND_CHECK_INTERVAL_MS) return
         lastOneHandCheckAt = now
         if (!settings.isFloatingBallOneHandModeEnabled || mode != MODE_IDLE) return
+        // Free-position mode skips auto left/right docking.
+        if (settings.isFloatingBallFreePositionEnabled) return
         val targetSide = resolveGravityDockSide(event.values[0], event.values[1]) ?: return
         if (targetSide == dockedSide || !::layoutParams.isInitialized) return
         dockToSide(targetSide, layoutParams.y)
@@ -186,7 +201,7 @@ class FloatingBallService : Service(), SensorEventListener {
         updateBubbleChrome()
 
         layoutParams = WindowManager.LayoutParams(
-            capsuleWidthPx(iconSizePx),
+            windowWidthPx(iconSizePx),
             iconSizePx,
             overlayWindowType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -199,6 +214,11 @@ class FloatingBallService : Service(), SensorEventListener {
         }
         if (!anchorInitialized) {
             moveToDefaultPosition()
+        } else if (settings.isFloatingBallFreePositionEnabled) {
+            layoutParams.x = anchorX
+            layoutParams.y = anchorY
+            clampPositionInPlace(layoutParams)
+            updateBubbleChrome()
         } else {
             dockToSide(dockedSide, anchorY)
         }
@@ -214,10 +234,16 @@ class FloatingBallService : Service(), SensorEventListener {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 showActiveBubble()
+                cancelHoldStillCheck()
+                holdTriggeredForGesture = false
+                dragPastMoveThreshold = false
                 downRawX = event.rawX
                 downRawY = event.rawY
                 downX = layoutParams.x
                 downY = layoutParams.y
+                holdStableRawX = event.rawX
+                holdStableRawY = event.rawY
+                holdStillSince = SystemClock.uptimeMillis()
                 val now = System.currentTimeMillis()
                 if (now - lastTapAt <= DOUBLE_TAP_WINDOW_MS) {
                     mode = MODE_RELOCATE
@@ -229,15 +255,32 @@ class FloatingBallService : Service(), SensorEventListener {
             }
 
             MotionEvent.ACTION_MOVE -> {
+                if (holdTriggeredForGesture) {
+                    // Boom already fired: stay at the pre-drag spot; do not follow the finger.
+                    layoutParams.x = downX
+                    layoutParams.y = downY
+                    clampPositionInPlace(layoutParams)
+                    updateBubbleLayout()
+                    return true
+                }
                 layoutParams.x = downX + (event.rawX - downRawX).toInt()
                 layoutParams.y = downY + (event.rawY - downRawY).toInt()
                 setCapsuleBackgroundVisible(false)
                 clampPositionInPlace(layoutParams)
                 updateBubbleLayout()
+                if (mode == MODE_DETECT) {
+                    val movedFromDown = abs(event.rawX - downRawX) > MOVE_THRESHOLD_PX ||
+                        abs(event.rawY - downRawY) > MOVE_THRESHOLD_PX
+                    if (movedFromDown) {
+                        dragPastMoveThreshold = true
+                        onHoldStillSample(event.rawX, event.rawY)
+                    }
+                }
                 return true
             }
 
             MotionEvent.ACTION_UP -> {
+                cancelHoldStillCheck()
                 setCapsuleBackgroundVisible(true)
                 val moved = abs(event.rawX - downRawX) > MOVE_THRESHOLD_PX ||
                     abs(event.rawY - downRawY) > MOVE_THRESHOLD_PX
@@ -263,31 +306,130 @@ class FloatingBallService : Service(), SensorEventListener {
                     updateBubbleLayout()
                     mode = MODE_IDLE
                 } else {
-                    val bubbleCenter = getBubbleIconCenterOnScreen()
-                    val sampleX = bubbleCenter?.x ?: (layoutParams.x + layoutParams.width / 2)
-                    val sampleY = bubbleCenter?.y ?: (layoutParams.y + layoutParams.height / 2)
-                    beginCaptureLaunchSuppression()
-                    val nextY = if (settings.isFloatingBallHeightLocked) anchorY else layoutParams.y
-                    if (settings.isFloatingBallSideLocked) {
-                        dockToSide(dockedSide, nextY)
-                    } else {
-                        dockToNearestSide(sampleX, nextY)
-                    }
-                    updateBubbleLayout()
+                    // Drag release: boom only if hold-still already fired while pressed.
+                    settleBallAfterDrag()
                     mode = MODE_IDLE
-                    BigBangCaptureDispatcher.captureAt(applicationContext, sampleX, sampleY)
+                    scheduleBubbleFade()
                 }
                 return true
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                setCapsuleBackgroundVisible(true)
+                cancelHoldStillCheck()
+                // Capture launch often cancels the touch; still snap back if we already boomed.
+                val snapBack = holdTriggeredForGesture
+                holdTriggeredForGesture = false
+                dragPastMoveThreshold = false
+                if (snapBack) {
+                    restorePositionBeforeDrag()
+                } else {
+                    setCapsuleBackgroundVisible(true)
+                }
                 scheduleBubbleFade()
                 mode = MODE_IDLE
                 return true
             }
         }
         return false
+    }
+
+    /**
+     * Stillness uses a small dp slop so finger jitter does not reset the hold timer.
+     * Only movement beyond that slop restarts [holdStillSince].
+     */
+    private fun onHoldStillSample(rawX: Float, rawY: Float) {
+        val slopPx = holdStillSlopPx()
+        val dx = rawX - holdStableRawX
+        val dy = rawY - holdStableRawY
+        if (dx * dx + dy * dy > slopPx * slopPx) {
+            holdStableRawX = rawX
+            holdStableRawY = rawY
+            holdStillSince = SystemClock.uptimeMillis()
+        }
+        scheduleHoldStillCheck()
+    }
+
+    private fun scheduleHoldStillCheck() {
+        cancelHoldStillCheck()
+        if (!dragPastMoveThreshold || holdTriggeredForGesture || mode != MODE_DETECT) return
+        val holdMs = settings.floatingBallTriggerHoldMs.toLong().coerceAtLeast(0L)
+        val elapsed = SystemClock.uptimeMillis() - holdStillSince
+        val remaining = (holdMs - elapsed).coerceAtLeast(0L)
+        bubbleHandler.postDelayed(holdStillCheckRunnable, remaining)
+    }
+
+    private fun cancelHoldStillCheck() {
+        bubbleHandler.removeCallbacks(holdStillCheckRunnable)
+    }
+
+    private fun maybeFireHoldStillBoom() {
+        if (mode != MODE_DETECT || holdTriggeredForGesture || !dragPastMoveThreshold) return
+        val holdMs = settings.floatingBallTriggerHoldMs.toLong().coerceAtLeast(0L)
+        val elapsed = SystemClock.uptimeMillis() - holdStillSince
+        if (elapsed < holdMs) {
+            scheduleHoldStillCheck()
+            return
+        }
+        holdTriggeredForGesture = true
+        val bubbleCenter = getBubbleIconCenterOnScreen()
+        val sampleX = bubbleCenter?.x ?: (layoutParams.x + layoutParams.width / 2)
+        val sampleY = bubbleCenter?.y ?: (layoutParams.y + layoutParams.height / 2)
+        beginCaptureLaunchSuppression()
+        BigBangCaptureDispatcher.captureAt(applicationContext, sampleX, sampleY)
+        NovaTextLogger.d("floating ball hold-still boom after ${elapsed}ms at ($sampleX,$sampleY)")
+        // Snap back to where the drag started; do not leave the ball at the boom point.
+        restorePositionBeforeDrag()
+    }
+
+    private fun holdStillSlopPx(): Float {
+        // ~10 dp: small jitter must not reset the 300 ms stillness timer.
+        return 10f * resources.displayMetrics.density
+    }
+
+    private fun settleBallAfterDrag() {
+        if (holdTriggeredForGesture) {
+            restorePositionBeforeDrag()
+            return
+        }
+        val bubbleCenter = getBubbleIconCenterOnScreen()
+        val sampleX = bubbleCenter?.x ?: (layoutParams.x + layoutParams.width / 2)
+        when {
+            settings.isFloatingBallFreePositionEnabled -> {
+                // Free position keeps both axes where the finger released.
+                // Height-lock only applies when the ball is docked to an edge.
+                clampPositionInPlace(layoutParams)
+                anchorX = layoutParams.x
+                anchorY = layoutParams.y
+                anchorInitialized = true
+                updateBubbleChrome()
+                updateBubbleLayout()
+            }
+            settings.isFloatingBallSideLocked -> {
+                val nextY = if (settings.isFloatingBallHeightLocked) anchorY else layoutParams.y
+                dockToSide(dockedSide, nextY)
+                updateBubbleLayout()
+            }
+            else -> {
+                val nextY = if (settings.isFloatingBallHeightLocked) anchorY else layoutParams.y
+                dockToNearestSide(sampleX, nextY)
+                updateBubbleLayout()
+            }
+        }
+    }
+
+    private fun restorePositionBeforeDrag() {
+        if (!::layoutParams.isInitialized) return
+        layoutParams.x = downX
+        layoutParams.y = downY
+        clampPositionInPlace(layoutParams)
+        if (settings.isFloatingBallFreePositionEnabled) {
+            anchorX = layoutParams.x
+            anchorY = layoutParams.y
+            anchorInitialized = true
+        }
+        setCapsuleBackgroundVisible(true)
+        updateBubbleChrome()
+        updateBubbleLayout()
     }
 
     private fun showActiveBubble() {
@@ -331,6 +473,15 @@ class FloatingBallService : Service(), SensorEventListener {
     private fun clampPositionInPlace(params: WindowManager.LayoutParams) {
         val safeArea = getSafeArea()
         val horizontalBounds = getHorizontalBounds()
+        if (settings.isFloatingBallFreePositionEnabled) {
+            val minX = horizontalBounds.left
+            val maxX = horizontalBounds.right - params.width
+            val minY = 0
+            val maxY = safeArea.bottom - params.height
+            params.x = params.x.coerceIn(minX, maxX)
+            params.y = params.y.coerceIn(minY, maxY)
+            return
+        }
         val iconInset = params.width - params.height
         val minX = horizontalBounds.left - iconInset
         val maxX = horizontalBounds.right - rightDockedWidth(params)
@@ -346,7 +497,15 @@ class FloatingBallService : Service(), SensorEventListener {
     }
 
     private fun saveCurrentPositionAsAnchor() {
-        dockToNearestSide(layoutParams.x + layoutParams.width / 2, layoutParams.y)
+        if (settings.isFloatingBallFreePositionEnabled) {
+            clampPositionInPlace(layoutParams)
+            anchorX = layoutParams.x
+            anchorY = layoutParams.y
+            anchorInitialized = true
+            updateBubbleChrome()
+        } else {
+            dockToNearestSide(layoutParams.x + layoutParams.width / 2, layoutParams.y)
+        }
     }
 
     private fun dockToNearestSide(centerX: Int, y: Int) {
@@ -398,7 +557,18 @@ class FloatingBallService : Service(), SensorEventListener {
         val newRange = (newSafeArea.height() - bubbleSizePx()).coerceAtLeast(0)
         val newY = newSafeArea.top + (newRange * verticalRatio).roundToInt()
         setCapsuleBackgroundVisible(true)
-        dockToSide(dockedSide, newY)
+        if (settings.isFloatingBallFreePositionEnabled) {
+            // Keep roughly the same place; clamp into the new safe / horizontal bounds.
+            layoutParams.y = newY
+            clampPositionInPlace(layoutParams)
+            anchorX = layoutParams.x
+            anchorY = layoutParams.y
+            anchorInitialized = true
+            lastSafeArea = Rect(newSafeArea)
+            updateBubbleChrome()
+        } else {
+            dockToSide(dockedSide, newY)
+        }
         bubbleView?.alpha = idleAlpha()
         updateBubbleLayout()
     }
@@ -513,6 +683,10 @@ class FloatingBallService : Service(), SensorEventListener {
         return (iconSizePx * CAPSULE_WIDTH_RATIO).roundToInt()
     }
 
+    private fun windowWidthPx(iconSizePx: Int): Int {
+        return if (settings.isFloatingBallFreePositionEnabled) iconSizePx else capsuleWidthPx(iconSizePx)
+    }
+
     private fun dp(value: Float): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
@@ -541,10 +715,17 @@ class FloatingBallService : Service(), SensorEventListener {
         if (!::layoutParams.isInitialized) return
         updateOneHandSensor()
         val bubbleSizePx = bubbleSizePx()
-        layoutParams.width = capsuleWidthPx(bubbleSizePx)
+        layoutParams.width = windowWidthPx(bubbleSizePx)
         layoutParams.height = bubbleSizePx
-        clampPositionInPlace(layoutParams)
-        dockToSide(dockedSide, layoutParams.y)
+        if (settings.isFloatingBallFreePositionEnabled) {
+            clampPositionInPlace(layoutParams)
+            anchorX = layoutParams.x
+            anchorY = layoutParams.y
+            anchorInitialized = true
+        } else {
+            clampPositionInPlace(layoutParams)
+            dockToSide(dockedSide, layoutParams.y)
+        }
         if (!isVisibilitySuppressed()) {
             bubbleView?.alpha = idleAlpha()
         }
@@ -592,9 +773,14 @@ class FloatingBallService : Service(), SensorEventListener {
 
     private fun updateBubbleChrome() {
         val iconSizePx = bubbleSizePx()
+        val freePosition = settings.isFloatingBallFreePositionEnabled
         val hiddenMode = settings.isFloatingBallHidden()
         val isIdle = ballIdle && capsuleBackgroundVisible
-        val showCapsuleBg = capsuleBackgroundVisible && !isLandscape()
+        val showCapsuleBg = !freePosition && capsuleBackgroundVisible && !isLandscape()
+        if (::layoutParams.isInitialized) {
+            layoutParams.width = windowWidthPx(iconSizePx)
+            layoutParams.height = iconSizePx
+        }
         bubbleView?.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = iconSizePx / 2f
@@ -609,7 +795,9 @@ class FloatingBallService : Service(), SensorEventListener {
             )
         }
         bubbleIconView?.layoutParams = FrameLayout.LayoutParams(iconSizePx, iconSizePx).apply {
-            gravity = if (dockedSide == DOCK_LEFT) {
+            gravity = if (freePosition) {
+                Gravity.CENTER
+            } else if (dockedSide == DOCK_LEFT) {
                 Gravity.END or Gravity.CENTER_VERTICAL
             } else {
                 Gravity.START or Gravity.CENTER_VERTICAL
@@ -619,6 +807,11 @@ class FloatingBallService : Service(), SensorEventListener {
             View.INVISIBLE
         } else {
             View.VISIBLE
+        }
+        if (freePosition) {
+            // Free position is a round ball only — no dock capsule or blue edge bar.
+            blueCapsuleView?.visibility = View.GONE
+            return
         }
         val capsuleW = capsuleWidthPx(iconSizePx)
         val iconCenterX = if (dockedSide == DOCK_LEFT) {
@@ -715,6 +908,8 @@ class FloatingBallService : Service(), SensorEventListener {
         private val activeState = MutableStateFlow(false)
 
         fun start(context: Context) {
+            // Explicit start turns the preference on. Default remains off until the user asks.
+            BigBangPreferences(context).setFloatingBallEnabled(true)
             resetStateMachine()
             if (!Settings.canDrawOverlays(context)) {
                 NovaTextLogger.d("overlay permission missing, skip starting floating ball")
@@ -734,8 +929,8 @@ class FloatingBallService : Service(), SensorEventListener {
         }
 
         fun stop(context: Context) {
+            BigBangPreferences(context).setFloatingBallEnabled(false)
             if (!isRunning) {
-                BigBangPreferences(context).setFloatingBallEnabled(false)
                 activeState.value = false
                 return
             }

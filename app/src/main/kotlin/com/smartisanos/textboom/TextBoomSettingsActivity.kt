@@ -150,6 +150,7 @@ import com.cashewteam.novatext.android.service.BoomOcrLauncher
 import com.cashewteam.novatext.android.service.FloatingBallService
 import com.cashewteam.novatext.android.service.FloatingBallTileService
 import com.cashewteam.novatext.android.service.ExperimentalTouchController
+import com.cashewteam.novatext.android.service.PassthroughRegionPreview
 import com.cashewteam.novatext.android.service.ExperimentalTouchPolicy
 import com.cashewteam.novatext.android.service.ExperimentalTriggerMode
 import com.cashewteam.novatext.android.service.NovaTextAccessibilityService
@@ -241,6 +242,8 @@ class TextBoomSettingsActivity : ComponentActivity() {
                     onFloatingBallOneHandAngleChange = { updateFloatingBallOneHandAngle(it) },
                     onFloatingBallHiddenChange = { updateFloatingBallHidden(it) },
                     onFloatingBallLandscapeSafeAreaChange = { updateFloatingBallLandscapeSafeArea(it) },
+                    onFloatingBallFreePositionChange = { updateFloatingBallFreePosition(it) },
+                    onFloatingBallTriggerHoldMsChange = { updateFloatingBallTriggerHoldMs(it) },
                     onAdaptiveLauncherIconChange = { updateAdaptiveLauncherIcon(it) },
                     onRequestDesktopOcrShortcut = { requestDesktopOcrShortcut() },
                     onClassicOverlayStyleChange = { updateClassicOverlayStyle(it) },
@@ -442,6 +445,19 @@ class TextBoomSettingsActivity : ComponentActivity() {
     private fun updateFloatingBallLandscapeSafeArea(enabled: Boolean) {
         settings.setFloatingBallLandscapeSafeAreaEnabled(enabled)
         FloatingBallService.refreshAppearance(this)
+    }
+
+    private fun updateFloatingBallFreePosition(enabled: Boolean) {
+        settings.setFloatingBallFreePositionEnabled(enabled)
+        if (enabled && settings.isFloatingBallHeightLocked) {
+            // Height lock fights free vertical placement; turn it off with free position.
+            settings.setFloatingBallHeightLocked(false)
+        }
+        FloatingBallService.refreshAppearance(this)
+    }
+
+    private fun updateFloatingBallTriggerHoldMs(value: Int) {
+        settings.setFloatingBallTriggerHoldMs(value)
     }
 
     private fun updateAdaptiveLauncherIcon(enabled: Boolean) {
@@ -816,6 +832,8 @@ private fun SettingsScreen(
     onFloatingBallOneHandAngleChange: (Int) -> Unit,
     onFloatingBallHiddenChange: (Boolean) -> Unit,
     onFloatingBallLandscapeSafeAreaChange: (Boolean) -> Unit,
+    onFloatingBallFreePositionChange: (Boolean) -> Unit,
+    onFloatingBallTriggerHoldMsChange: (Int) -> Unit,
     onAdaptiveLauncherIconChange: (Boolean) -> Unit,
     onRequestDesktopOcrShortcut: () -> Unit,
     onClassicOverlayStyleChange: (Boolean) -> Unit,
@@ -849,6 +867,9 @@ private fun SettingsScreen(
     var selectedOcrMode by rememberSaveable { mutableStateOf(settings.ocrRecognizerMode) }
     var ocrSelectionCaptureDelayMs by rememberSaveable {
         mutableIntStateOf(settings.ocrSelectionCaptureDelayMs)
+    }
+    var longPressExtraDelayMs by rememberSaveable {
+        mutableIntStateOf(settings.longPressExtraDelayMs)
     }
     var currentPage by rememberSaveable { mutableStateOf(initialPage.name) }
     var debugSkipAccessibility by rememberSaveable {
@@ -924,6 +945,12 @@ private fun SettingsScreen(
     }
     var floatingBallLandscapeSafeArea by rememberSaveable {
         mutableStateOf(settings.isFloatingBallLandscapeSafeAreaEnabled)
+    }
+    var floatingBallFreePosition by rememberSaveable {
+        mutableStateOf(settings.isFloatingBallFreePositionEnabled)
+    }
+    var floatingBallTriggerHoldMs by rememberSaveable {
+        mutableIntStateOf(settings.floatingBallTriggerHoldMs)
     }
     var adaptiveLauncherIconEnabled by rememberSaveable {
         mutableStateOf(settings.isAdaptiveLauncherIconEnabled)
@@ -1134,6 +1161,8 @@ private fun SettingsScreen(
                                 floatingBallOneHandAngle = floatingBallOneHandAngle,
                                 floatingBallHidden = floatingBallHidden,
                                 floatingBallLandscapeSafeArea = floatingBallLandscapeSafeArea,
+                                floatingBallFreePosition = floatingBallFreePosition,
+                                floatingBallTriggerHoldMs = floatingBallTriggerHoldMs,
                                 onFloatingBallSizeChange = { floatingBallSizePercent = it; onFloatingBallSizeChange(it) },
                                 onFloatingBallActiveAlphaChange = { floatingBallActiveAlphaPercent = it; onFloatingBallActiveAlphaChange(it) },
                                 onFloatingBallIdleAlphaChange = { floatingBallIdleAlphaPercent = it; onFloatingBallIdleAlphaChange(it) },
@@ -1143,6 +1172,8 @@ private fun SettingsScreen(
                                 onFloatingBallOneHandAngleChange = { floatingBallOneHandAngle = it; onFloatingBallOneHandAngleChange(it) },
                                 onFloatingBallHiddenChange = { floatingBallHidden = it; onFloatingBallHiddenChange(it) },
                                 onFloatingBallLandscapeSafeAreaChange = { floatingBallLandscapeSafeArea = it; onFloatingBallLandscapeSafeAreaChange(it) },
+                                onFloatingBallFreePositionChange = { floatingBallFreePosition = it; onFloatingBallFreePositionChange(it) },
+                                onFloatingBallTriggerHoldMsChange = { floatingBallTriggerHoldMs = it; onFloatingBallTriggerHoldMsChange(it) },
                             )
                             if (floatingBallRunning) {
                                 SecondaryActionButton(
@@ -1318,6 +1349,7 @@ private fun SettingsScreen(
                             modes = ocrModes,
                             whitelistCount = selectedCount,
                             selectionCaptureDelayMs = ocrSelectionCaptureDelayMs,
+                            longPressExtraDelayMs = longPressExtraDelayMs,
                             useShizukuScreenshot = permissionState.useShizukuScreenshot,
                             onModeSelected = {
                                 selectedOcrMode = it
@@ -1328,6 +1360,10 @@ private fun SettingsScreen(
                             onSelectionCaptureDelayChange = {
                                 ocrSelectionCaptureDelayMs = it
                                 settings.setOcrSelectionCaptureDelayMs(it)
+                            },
+                            onLongPressExtraDelayChange = {
+                                longPressExtraDelayMs = it
+                                settings.setLongPressExtraDelayMs(it)
                             },
                             onRequestDesktopOcrShortcut = onRequestDesktopOcrShortcut,
                             onUseShizukuScreenshotChange = {
@@ -1652,11 +1688,13 @@ private fun OcrSection(
     modes: List<OcrModeItem>,
     whitelistCount: Int,
     selectionCaptureDelayMs: Int,
+    longPressExtraDelayMs: Int,
     useShizukuScreenshot: Boolean,
     onModeSelected: (String) -> Unit,
     onPickImage: () -> Unit,
     onManageWhitelist: () -> Unit,
     onSelectionCaptureDelayChange: (Int) -> Unit,
+    onLongPressExtraDelayChange: (Int) -> Unit,
     onRequestDesktopOcrShortcut: () -> Unit,
     onUseShizukuScreenshotChange: (Boolean) -> Unit,
 ) {
@@ -1722,6 +1760,14 @@ private fun OcrSection(
             valueSuffix = "ms",
             steps = 19,
             onValueChange = onSelectionCaptureDelayChange,
+        )
+        FloatingBallSlider(
+            title = stringResource(R.string.long_press_extra_delay_title),
+            value = longPressExtraDelayMs,
+            valueRange = 0f..1000f,
+            valueSuffix = "ms",
+            steps = 19,
+            onValueChange = onLongPressExtraDelayChange,
         )
         Text(
             text = stringResource(R.string.desktop_ocr_entry_summary),
@@ -2360,6 +2406,9 @@ private fun DebugSection(
 private fun ColumnScope.ExperimentalTouchSettingsPage(settings: BigBangSettings) {
     val context = LocalContext.current
     var revision by remember { mutableIntStateOf(0) }
+    DisposableEffect(Unit) {
+        onDispose { PassthroughRegionPreview.hide() }
+    }
     val savedConfig = remember(revision) { ExperimentalTouchPolicy.config(settings) }
     var mode by remember(savedConfig.mode) { mutableStateOf(savedConfig.mode) }
     var threshold by remember(mode, revision) {
@@ -2387,6 +2436,9 @@ private fun ColumnScope.ExperimentalTouchSettingsPage(settings: BigBangSettings)
     var showThresholdMaxDialog by remember { mutableStateOf(false) }
     var sensorTapDuration by remember(revision) { mutableStateOf(settings.experimentalTouchSensorDuration) }
     var showRiskDialog by remember { mutableStateOf(false) }
+    var passthroughInsetDp by remember(revision) {
+        mutableIntStateOf(settings.experimentalTouchPassthroughInsetDp)
+    }
     val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
     val accessibilityConnected = NovaTextAccessibilityService.activeInstance != null
     val accessibilityEnabled = FloatingBallService.isAccessibilityEnabled(context)
@@ -2397,7 +2449,7 @@ private fun ColumnScope.ExperimentalTouchSettingsPage(settings: BigBangSettings)
     SettingsSectionCard {
         Text("实验性功能", color = Color(0xFFB05D00), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(
-            "使用 Android 13 的 TouchInteractionController。所有触发方式都会在各自的单击最长时长内观察起始触摸，再决定触发、委托或回放。",
+            "使用 Android 13 的 TouchInteractionController。所有触发方式都会在各自的单击最长时长内观察起始触摸，再决定触发、委托或回放。边缘放行区内触摸交给系统手势。",
             color = LocalSettingsPalette.current.textSecondary,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -2545,6 +2597,38 @@ private fun ColumnScope.ExperimentalTouchSettingsPage(settings: BigBangSettings)
     }
 
     SettingsSectionCard {
+        Text(
+            stringResource(R.string.experimental_passthrough_inset_title),
+            color = LocalSettingsPalette.current.textPrimary,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            stringResource(R.string.experimental_passthrough_inset_summary),
+            color = LocalSettingsPalette.current.textSecondary,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+        )
+        FloatingBallSlider(
+            title = stringResource(R.string.experimental_passthrough_inset_title),
+            value = passthroughInsetDp,
+            valueRange = 0f..120f,
+            valueSuffix = "dp",
+            steps = 23,
+            onValueChange = { value ->
+                passthroughInsetDp = value
+                settings.setExperimentalTouchPassthroughInsetDp(value)
+                PassthroughRegionPreview.show(context, value)
+                ExperimentalTouchController.refreshPassthrough(context)
+            },
+            onValueChangeFinished = {
+                PassthroughRegionPreview.hide()
+                ExperimentalTouchController.refreshPassthrough(context)
+            },
+        )
+    }
+
+    SettingsSectionCard {
         Text("权限与运行状态", color = LocalSettingsPalette.current.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         ExperimentalStatusRow("系统版本", if (supported) "Android 13+，已支持" else "需要 Android 13+")
         ExperimentalStatusRow("当前触发方式", if (experimentalTouchSelected) "触控事件监听" else "悬浮球触发")
@@ -2597,9 +2681,9 @@ private fun ColumnScope.ExperimentalTouchSettingsPage(settings: BigBangSettings)
             text = {
                 Text(
                     if (ExperimentalTouchPolicy.isMultiFingerTap(savedConfig.mode)) {
-                        "双指/三指识别会暂时拦截起始触摸，可能造成普通操作延迟；未形成多指手势的短点击会在抬起后补发。"
+                        "双指/三指识别会暂时拦截起始触摸，可能造成普通操作延迟；未形成多指手势的短点击会在抬起后补发。边缘放行区仍交给系统手势。"
                     } else {
-                        "压感、Size 和面积会在单击最长识别时长内持续观察；阈值命中后消费本次触控并触发 Nova Text，未命中则委托或回放普通操作。"
+                        "压感、Size 和面积会在单击最长识别时长内持续观察；阈值命中后消费本次触控并触发 Nova Text，未命中则委托或回放普通操作。边缘放行区仍交给系统手势。"
                     },
                 )
             },
@@ -2911,6 +2995,8 @@ private fun FloatingBallSection(
     floatingBallOneHandAngle: Int,
     floatingBallHidden: Boolean,
     floatingBallLandscapeSafeArea: Boolean,
+    floatingBallFreePosition: Boolean,
+    floatingBallTriggerHoldMs: Int,
     onFloatingBallSizeChange: (Int) -> Unit,
     onFloatingBallActiveAlphaChange: (Int) -> Unit,
     onFloatingBallIdleAlphaChange: (Int) -> Unit,
@@ -2920,6 +3006,8 @@ private fun FloatingBallSection(
     onFloatingBallOneHandAngleChange: (Int) -> Unit,
     onFloatingBallHiddenChange: (Boolean) -> Unit,
     onFloatingBallLandscapeSafeAreaChange: (Boolean) -> Unit,
+    onFloatingBallFreePositionChange: (Boolean) -> Unit,
+    onFloatingBallTriggerHoldMsChange: (Int) -> Unit,
 ) {
     val palette = LocalSettingsPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -2989,6 +3077,26 @@ private fun FloatingBallSection(
             checked = floatingBallLandscapeSafeArea,
             onCheckedChange = onFloatingBallLandscapeSafeAreaChange,
         )
+        DebugSwitchRow(
+            title = stringResource(R.string.permission_floating_ball_free_position_title),
+            subtitle = stringResource(R.string.permission_floating_ball_free_position_summary),
+            checked = floatingBallFreePosition,
+            onCheckedChange = onFloatingBallFreePositionChange,
+        )
+        FloatingBallSlider(
+            title = stringResource(R.string.permission_floating_ball_trigger_hold_title),
+            value = floatingBallTriggerHoldMs,
+            valueRange = 0f..1000f,
+            valueSuffix = "ms",
+            steps = 19,
+            onValueChange = onFloatingBallTriggerHoldMsChange,
+        )
+        Text(
+            text = stringResource(R.string.permission_floating_ball_trigger_hold_summary),
+            color = palette.textSecondary,
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+        )
     }
 }
 
@@ -3000,6 +3108,7 @@ private fun FloatingBallSlider(
     valueSuffix: String = "%",
     steps: Int = 0,
     onValueChange: (Int) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null,
 ) {
     val palette = LocalSettingsPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -3023,6 +3132,7 @@ private fun FloatingBallSlider(
         Slider(
             value = value.toFloat(),
             onValueChange = { onValueChange(it.roundToInt()) },
+            onValueChangeFinished = { onValueChangeFinished?.invoke() },
             valueRange = valueRange,
             steps = steps,
             colors = SliderDefaults.colors(
